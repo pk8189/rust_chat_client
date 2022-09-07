@@ -1,5 +1,7 @@
 use crossterm::event::{self, Event, KeyCode};
-use std::io;
+use reqwest;
+use serde::Deserialize;
+use std::{collections::HashMap, io};
 use tui::{
     backend::Backend,
     layout::{Constraint, Direction, Layout},
@@ -7,6 +9,11 @@ use tui::{
     widgets::{Block, Borders, Paragraph},
     Frame, Terminal,
 };
+
+#[derive(Deserialize)]
+struct LoginResponse {
+    pub token: String,
+}
 
 enum InputMode {
     Username,
@@ -17,6 +24,7 @@ pub struct Login {
     username: String,
     password: String,
     input_mode: InputMode,
+    error_msg: String,
 }
 
 impl Default for Login {
@@ -25,7 +33,30 @@ impl Default for Login {
             username: String::new(),
             password: String::new(),
             input_mode: InputMode::Username,
+            error_msg: String::new(),
         }
+    }
+}
+
+fn get_token(username: &str, password: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut map = HashMap::new();
+    map.insert("username", username);
+    map.insert("password", password);
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .post("http://localhost:8000/login")
+        .json(&map)
+        .send()?;
+
+    if resp.status().is_success() {
+        let res: LoginResponse = resp.json()?;
+        return Ok(res.token);
+    } else {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Unable to log in with the provided credentials",
+        )
+        .into());
     }
 }
 
@@ -55,9 +86,10 @@ pub fn run_login<B: Backend>(terminal: &mut Terminal<B>, mut app: Login) -> io::
                     _ => {}
                 },
                 InputMode::Password => match key.code {
-                    KeyCode::Enter => {
-                        app.input_mode = InputMode::Username;
-                    }
+                    KeyCode::Enter => match get_token(&app.username, &app.password) {
+                        Ok(token) => app.error_msg = token,
+                        Err(e) => app.error_msg = e.to_string(),
+                    },
                     KeyCode::Char(c) => {
                         app.password.push(c);
                     }
@@ -81,8 +113,8 @@ pub fn run_login<B: Backend>(terminal: &mut Terminal<B>, mut app: Login) -> io::
 fn login_ui<B: Backend>(f: &mut Frame<B>, app: &Login) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .margin(3)
-        .constraints([Constraint::Length(3), Constraint::Length(3)].as_ref())
+        .margin(2)
+        .constraints([Constraint::Max(3), Constraint::Max(3)].as_ref())
         .split(f.size());
 
     let username_input = Paragraph::new(app.username.as_ref())
